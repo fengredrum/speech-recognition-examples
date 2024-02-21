@@ -142,3 +142,5 @@ if __name__ == "__main__":
         seed=2,
     )
     print(ds)
+
+    print(next(iter(ds["test"])))

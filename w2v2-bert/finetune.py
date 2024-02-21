@@ -3,15 +3,13 @@ import json
 import random
 import argparse
 import numpy as np
-
-from datasets import load_dataset, load_metric, Audio
 import evaluate
+
 from transformers import TrainingArguments, Trainer
 from transformers import (Wav2Vec2BertForCTC, Wav2Vec2CTCTokenizer,
                           SeamlessM4TFeatureExtractor, Wav2Vec2BertProcessor)
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
-from utils import remove_special_characters, extract_all_chars
+
+from utils import remove_special_characters, extract_all_chars, prepare_dataset, DataCollatorCTCWithPadding
 from load_datasets import load_process_datasets
 
 model_name_or_path = "facebook/w2v-bert-2.0"
@@ -97,10 +95,6 @@ if __name__ == "__main__":
     processor = Wav2Vec2BertProcessor(
         feature_extractor=feature_extractor, tokenizer=tokenizer)
 
-    # Convert sampling rate
-    ds = ds.cast_column(
-        "audio", Audio(sampling_rate=16_000))
-
     rand_int = random.randint(0, args.num_train_samples-1)
     print("Target text:",
           ds["train"][rand_int]["sentence"])
@@ -109,52 +103,11 @@ if __name__ == "__main__":
     print("Sampling rate:",
           ds["train"][rand_int]["audio"]["sampling_rate"])
 
-    def prepare_dataset(batch):
-        audio = batch["audio"]
-        batch["input_features"] = processor(
-            audio["array"], sampling_rate=audio["sampling_rate"]).input_features[0]
-        batch["input_length"] = len(batch["input_features"])
-
-        batch["labels"] = processor(text=batch["sentence"]).input_ids
-        return batch
-
     ds = ds.map(
-        prepare_dataset, remove_columns=ds["train"].column_names, num_proc=args.num_proc)
-
-    # Create Collator
-
-    @dataclass
-    class DataCollatorCTCWithPadding:
-
-        processor: Wav2Vec2BertProcessor
-        padding: Union[bool, str] = True
-
-        def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
-            # split inputs and labels since they have to be of different lenghts and need
-            # different padding methods
-            input_features = [{"input_features": feature["input_features"]}
-                              for feature in features]
-            label_features = [{"input_ids": feature["labels"]}
-                              for feature in features]
-
-            batch = self.processor.pad(
-                input_features,
-                padding=self.padding,
-                return_tensors="pt",
-            )
-
-            labels_batch = self.processor.pad(
-                labels=label_features,
-                padding=self.padding,
-                return_tensors="pt",
-            )
-            # replace padding with -100 to ignore loss correctly
-            labels = labels_batch["input_ids"].masked_fill(
-                labels_batch.attention_mask.ne(1), -100)
-
-            batch["labels"] = labels
-
-            return batch
+        prepare_dataset, remove_columns=ds["train"].column_names, 
+        fn_kwargs={"processor": processor},
+        num_proc=args.num_proc, 
+        )
 
     data_collator = DataCollatorCTCWithPadding(
         processor=processor, padding=True)
