@@ -18,34 +18,44 @@ def load_common_voice(
         use_valid_to_train=True,
         test_only=False,
 ):
-    if streaming:
-        ds = IterableDatasetDict()
-    else:
-        ds = DatasetDict()
 
     # Load test data
-    ds["test"] = load_dataset(
+    ds_test = load_dataset(
         full_name, language_abbr, split="test",
-        streaming=streaming, cache_dir=cache_dir, use_auth_token=True)
+        cache_dir=cache_dir, token=True, trust_remote_code=True)
 
     # Load train data
     if not test_only:
-        ds["train"] = load_dataset(
+        ds_train = load_dataset(
             full_name, language_abbr, split="train",
-            streaming=streaming, cache_dir=cache_dir, use_auth_token=True)
+            cache_dir=cache_dir, token=True, trust_remote_code=True)
 
     # Use validation data to train
     if use_valid_to_train and not test_only:
-        ds["valid"] = load_dataset(
+        ds_valid = load_dataset(
             full_name, language_abbr, split="validation",
-            streaming=streaming, cache_dir=cache_dir, use_auth_token=True)
-        ds["train"] = concatenate_datasets([ds["train"], ds["valid"]])
-        del ds["valid"]
+            cache_dir=cache_dir, token=True, trust_remote_code=True)
+        ds_train = concatenate_datasets([ds_train, ds_valid])
+        del ds_valid
+
+    if streaming:
+        ds = IterableDatasetDict()
+        ds["test"] = ds_test.to_iterable_dataset()
+        if not test_only:
+            ds["train"] = ds_train.to_iterable_dataset()
+            del ds_train
+    else:
+        ds = DatasetDict()
+        ds["test"] = ds_test
+        if not test_only:
+            ds["train"] = ds_train
+            del ds_train
+
+    del ds_test
 
     # Remove unnecessary columns
     ds = ds.remove_columns(
         ["accent", "age", "client_id", "down_votes", "gender", "locale", "segment", "up_votes", "variant"])
-
     # Convert sampling rate
     ds = ds.cast_column("audio", Audio(sampling_rate=sampling_rate))
 
@@ -93,33 +103,42 @@ def load_process_datasets(datasets_settings,
     if streaming:
         ds = ds.shuffle(seed, buffer_size=buffer_size)
 
-        ds["train"] = ds["train"].take(num_train_samples)
         ds["test"] = ds["test"].take(num_test_samples)
+        if not test_only:
+            ds["train"] = ds["train"].take(num_train_samples)
     else:
         ds = ds.shuffle(seed)
 
-        num_train_samples = min(num_train_samples, ds["train"].num_rows)
-        ds["train"] = ds["train"].select(range(num_train_samples))
         num_test_samples = min(num_test_samples, ds["test"].num_rows)
         ds["test"] = ds["test"].select(range(num_test_samples))
+        if not test_only:
+            num_train_samples = min(num_train_samples, ds["train"].num_rows)
+            ds["train"] = ds["train"].select(range(num_train_samples))
 
     return ds
 
 
 if __name__ == "__main__":
     datasets_settings = [
-        ["common_voice", {
-            "full_name": "mozilla-foundation/common_voice_16_0", "language_abbr": "mn"}],
+        ["common_voice",
+         {"full_name": "mozilla-foundation/common_voice_16_0",
+             "language_abbr": "mn", "use_valid_to_train": False, }
+         ],
+        ["common_voice",
+         {"full_name": "mozilla-foundation/common_voice_16_0",
+             "language_abbr": "ml", "use_valid_to_train": False, }
+         ],
     ]
 
-    num_train_samples = 1000
-    num_test_samples = 500
-    
+    num_train_samples = 50000
+    num_test_samples = 20000
+
     ds = load_process_datasets(
         datasets_settings,
         num_train_samples=num_train_samples,
         num_test_samples=num_test_samples,
-        test_only=True,
+        test_only=False,
         streaming=False,
+        seed=2,
     )
     print(ds)
