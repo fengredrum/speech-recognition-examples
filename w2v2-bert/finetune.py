@@ -1,7 +1,6 @@
-import re
-import random
-import json
 import torch
+import json
+import random
 import argparse
 import numpy as np
 
@@ -40,6 +39,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     print(f"Settings: {args}")
+
+    model_name_or_path = "facebook/w2v-bert-2.0"
 
     # Load dataset
     dataset_name = "mozilla-foundation/common_voice_16_0"
@@ -88,7 +89,7 @@ if __name__ == "__main__":
 
     # Preparing for finetuning
     feature_extractor = SeamlessM4TFeatureExtractor.from_pretrained(
-        "facebook/w2v-bert-2.0")
+        model_name_or_path)
 
     processor = Wav2Vec2BertProcessor(
         feature_extractor=feature_extractor, tokenizer=tokenizer)
@@ -179,7 +180,7 @@ if __name__ == "__main__":
 
     # Load pretrained model
     model = Wav2Vec2BertForCTC.from_pretrained(
-        "facebook/w2v-bert-2.0",
+        model_name_or_path,
         attention_dropout=0.0,
         hidden_dropout=0.0,
         feat_proj_dropout=0.0,

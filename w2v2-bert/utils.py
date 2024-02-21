@@ -1,3 +1,5 @@
+import re
+
 def remove_special_characters(batch, chars_to_remove_regex):
     # remove special characters
     batch["sentence"] = re.sub(
