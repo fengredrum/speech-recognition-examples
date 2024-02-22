@@ -1,5 +1,3 @@
-import json
-import random
 import argparse
 import numpy as np
 import evaluate
@@ -12,12 +10,7 @@ from transformers import (
     Wav2Vec2BertProcessor,
 )
 
-from utils import (
-    remove_special_characters,
-    extract_all_chars,
-    prepare_dataset,
-    DataCollatorCTCWithPadding,
-)
+from utils import prepare_dataset, DataCollatorCTCWithPadding
 from load_datasets import load_process_datasets
 
 
@@ -50,22 +43,22 @@ if __name__ == "__main__":
     parser.add_argument("--metric", default="wer")
     parser.add_argument("--device", default="cuda")
     # Dataset setups
-    parser.add_argument("--num_train_samples", default=2000, type=int)
-    parser.add_argument("--num_test_samples", default=500, type=int)
+    parser.add_argument("--num_train_samples", default=None, type=int)
+    parser.add_argument("--num_test_samples", default=None, type=int)
     # parser.add_argument("--max_input_length", default=30.0, type=float)
-    parser.add_argument("--streaming", default=False, type=bool)
+    parser.add_argument("--streaming", action="store_true")
     parser.add_argument("--num_proc", default=4, type=int)
     parser.add_argument("--seed", default=27, type=int)
     # Finetuning setups
     parser.add_argument("--gradient_accumulation_steps", default=2, type=int)
-    parser.add_argument("--train_batch_size", default=16, type=int)
+    parser.add_argument("--train_batch_size", default=32, type=int)
     parser.add_argument("--eval_batch_size", default=16, type=int)
     parser.add_argument("--fp16", default=True, type=bool)
 
     parser.add_argument("--warmup_steps", default=500, type=int)
     parser.add_argument("--max_steps", default=1000, type=int)
     parser.add_argument("--save_steps", default=1000, type=int)
-    parser.add_argument("--eval_steps", default=50, type=int)
+    parser.add_argument("--eval_steps", default=100, type=int)
     parser.add_argument("--logging_steps", default=25, type=int)
 
     args = parser.parse_args()
@@ -80,62 +73,16 @@ if __name__ == "__main__":
         streaming=args.streaming,
         seed=args.seed,
     )
+    print("Dataset info: ", ds)
 
-    # Remove special characters and normalize text
-    chars_to_remove = "[\,\?\.\!\-\;\:\"\“\%\‘\”\�'\»\«]"
-    ds = ds.map(
-        remove_special_characters,
-        fn_kwargs={"chars_to_remove_regex": chars_to_remove},
-        num_proc=args.num_proc,
-    )
-
-    # Build vocabulary and load into tokenizer
-    vocab_text = ds.map(
-        extract_all_chars,
-        batched=True,
-        batch_size=-1,
-        keep_in_memory=True,
-        remove_columns=ds["train"].column_names,
-        num_proc=args.num_proc,
-    )
-
-    vocab_list = list(
-        set(vocab_text["train"]["vocab"][0]) | set(vocab_text["test"]["vocab"][0])
-    )
-    vocab_dict = {v: k for k, v in enumerate(sorted(vocab_list))}
-    vocab_dict["|"] = vocab_dict[" "]
-    del vocab_dict[" "]
-    vocab_dict["[UNK]"] = len(vocab_dict)
-    vocab_dict["[PAD]"] = len(vocab_dict)
-    print(vocab_dict)
-
-    with open("vocab.json", "w") as vocab_file:
-        json.dump(vocab_dict, vocab_file)
-
+    # Preparing for finetuning
     tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(
         "./", unk_token="[UNK]", pad_token="[PAD]", word_delimiter_token="|"
     )
-
-    # Preparing for finetuning
     feature_extractor = SeamlessM4TFeatureExtractor.from_pretrained(model_name_or_path)
-
     processor = Wav2Vec2BertProcessor(
         feature_extractor=feature_extractor, tokenizer=tokenizer
     )
-
-    rand_int = random.randint(0, args.num_train_samples - 1)
-    print("Target text:", ds["train"][rand_int]["sentence"])
-    print("Input array shape:", ds["train"][rand_int]["audio"]["array"].shape)
-    print("Sampling rate:", ds["train"][rand_int]["audio"]["sampling_rate"])
-
-    ds = ds.map(
-        prepare_dataset,
-        remove_columns=ds["train"].column_names,
-        fn_kwargs={"processor": processor},
-        num_proc=args.num_proc,
-    )
-
-    data_collator = DataCollatorCTCWithPadding(processor=processor, padding=True)
 
     metric = evaluate.load(args.metric)
 
@@ -153,6 +100,27 @@ if __name__ == "__main__":
 
         return {args.metric: metric_result}
 
+    ds_sample = next(iter(ds["train"]))
+    print("Target text:", ds_sample["sentence"])
+    print("Input array shape:", ds_sample["audio"]["array"].shape)
+    print("Sampling rate:", ds_sample["audio"]["sampling_rate"])
+
+    if args.streaming:
+        map_kwargs = {}
+        training_kwargs = {}
+    else:
+        map_kwargs = {"num_proc": args.num_proc}
+        training_kwargs = {"group_by_length": True}
+
+    ds = ds.map(
+        prepare_dataset,
+        remove_columns=ds["train"].column_names,
+        fn_kwargs={"processor": processor},
+        **map_kwargs,
+    )
+
+    data_collator = DataCollatorCTCWithPadding(processor=processor, padding=True)
+
     # Load pretrained model
     model = Wav2Vec2BertForCTC.from_pretrained(
         model_name_or_path,
@@ -167,10 +135,9 @@ if __name__ == "__main__":
         vocab_size=len(processor.tokenizer),
     ).to(args.device)
 
-    repo_name = "w2v-bert-CV16.0"
+    repo_name = "logs/w2v-bert-CV16.0"
     training_args = TrainingArguments(
         output_dir=repo_name,
-        group_by_length=True,
         learning_rate=5e-5,
         warmup_steps=args.warmup_steps,
         per_device_train_batch_size=args.train_batch_size,
@@ -189,6 +156,7 @@ if __name__ == "__main__":
         metric_for_best_model=args.metric,
         greater_is_better=False,
         push_to_hub=False,
+        **training_kwargs,
     )
 
     trainer = Trainer(
