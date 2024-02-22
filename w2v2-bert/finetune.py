@@ -1,32 +1,47 @@
-import torch
 import json
 import random
 import argparse
 import numpy as np
-
-from datasets import load_dataset, load_metric, Audio
 import evaluate
+
 from transformers import TrainingArguments, Trainer
-from transformers import (Wav2Vec2BertForCTC, Wav2Vec2CTCTokenizer,
-                          SeamlessM4TFeatureExtractor, Wav2Vec2BertProcessor)
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
-from utils import remove_special_characters, extract_all_chars
+from transformers import (
+    Wav2Vec2BertForCTC,
+    Wav2Vec2CTCTokenizer,
+    SeamlessM4TFeatureExtractor,
+    Wav2Vec2BertProcessor,
+)
+
+from utils import (
+    remove_special_characters,
+    extract_all_chars,
+    prepare_dataset,
+    DataCollatorCTCWithPadding,
+)
 from load_datasets import load_process_datasets
 
-model_name_or_path = "facebook/w2v-bert-2.0"
 
 # TODO Move to ArgumentParser
 datasets_settings = [
-    ["common_voice",
-     {"full_name": "mozilla-foundation/common_voice_16_0",
-         "language_abbr": "mn", "use_valid_to_train": False, }
-     ],
-    ["common_voice",
-     {"full_name": "mozilla-foundation/common_voice_16_0",
-      "language_abbr": "ml", "use_valid_to_train": False, }
-     ],
+    [
+        "common_voice",
+        {
+            "full_name": "mozilla-foundation/common_voice_16_0",
+            "language_abbr": "mn",
+            "use_valid_to_train": False,
+        },
+    ],
+    [
+        "common_voice",
+        {
+            "full_name": "mozilla-foundation/common_voice_16_0",
+            "language_abbr": "ml",
+            "use_valid_to_train": False,
+        },
+    ],
 ]
+
+model_name_or_path = "facebook/w2v-bert-2.0"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -67,16 +82,26 @@ if __name__ == "__main__":
     )
 
     # Remove special characters and normalize text
-    chars_to_remove = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\'\»\«]'
-    ds = ds.map(remove_special_characters, fn_kwargs={
-        "chars_to_remove_regex": chars_to_remove}, num_proc=args.num_proc)
+    chars_to_remove = "[\,\?\.\!\-\;\:\"\“\%\‘\”\�'\»\«]"
+    ds = ds.map(
+        remove_special_characters,
+        fn_kwargs={"chars_to_remove_regex": chars_to_remove},
+        num_proc=args.num_proc,
+    )
 
     # Build vocabulary and load into tokenizer
-    vocab_text = ds.map(extract_all_chars, batched=True, batch_size=-1,
-                        keep_in_memory=True, remove_columns=ds["train"].column_names, num_proc=args.num_proc)
+    vocab_text = ds.map(
+        extract_all_chars,
+        batched=True,
+        batch_size=-1,
+        keep_in_memory=True,
+        remove_columns=ds["train"].column_names,
+        num_proc=args.num_proc,
+    )
 
-    vocab_list = list(set(vocab_text["train"]["vocab"][0])
-                      | set(vocab_text["test"]["vocab"][0]))
+    vocab_list = list(
+        set(vocab_text["train"]["vocab"][0]) | set(vocab_text["test"]["vocab"][0])
+    )
     vocab_dict = {v: k for k, v in enumerate(sorted(vocab_list))}
     vocab_dict["|"] = vocab_dict[" "]
     del vocab_dict[" "]
@@ -84,80 +109,33 @@ if __name__ == "__main__":
     vocab_dict["[PAD]"] = len(vocab_dict)
     print(vocab_dict)
 
-    with open('vocab.json', 'w') as vocab_file:
+    with open("vocab.json", "w") as vocab_file:
         json.dump(vocab_dict, vocab_file)
 
     tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(
-        "./", unk_token="[UNK]", pad_token="[PAD]", word_delimiter_token="|")
+        "./", unk_token="[UNK]", pad_token="[PAD]", word_delimiter_token="|"
+    )
 
     # Preparing for finetuning
-    feature_extractor = SeamlessM4TFeatureExtractor.from_pretrained(
-        model_name_or_path)
+    feature_extractor = SeamlessM4TFeatureExtractor.from_pretrained(model_name_or_path)
 
     processor = Wav2Vec2BertProcessor(
-        feature_extractor=feature_extractor, tokenizer=tokenizer)
+        feature_extractor=feature_extractor, tokenizer=tokenizer
+    )
 
-    # Convert sampling rate
-    ds = ds.cast_column(
-        "audio", Audio(sampling_rate=16_000))
-
-    rand_int = random.randint(0, args.num_train_samples-1)
-    print("Target text:",
-          ds["train"][rand_int]["sentence"])
-    print("Input array shape:",
-          ds["train"][rand_int]["audio"]["array"].shape)
-    print("Sampling rate:",
-          ds["train"][rand_int]["audio"]["sampling_rate"])
-
-    def prepare_dataset(batch):
-        audio = batch["audio"]
-        batch["input_features"] = processor(
-            audio["array"], sampling_rate=audio["sampling_rate"]).input_features[0]
-        batch["input_length"] = len(batch["input_features"])
-
-        batch["labels"] = processor(text=batch["sentence"]).input_ids
-        return batch
+    rand_int = random.randint(0, args.num_train_samples - 1)
+    print("Target text:", ds["train"][rand_int]["sentence"])
+    print("Input array shape:", ds["train"][rand_int]["audio"]["array"].shape)
+    print("Sampling rate:", ds["train"][rand_int]["audio"]["sampling_rate"])
 
     ds = ds.map(
-        prepare_dataset, remove_columns=ds["train"].column_names, num_proc=args.num_proc)
+        prepare_dataset,
+        remove_columns=ds["train"].column_names,
+        fn_kwargs={"processor": processor},
+        num_proc=args.num_proc,
+    )
 
-    # Create Collator
-
-    @dataclass
-    class DataCollatorCTCWithPadding:
-
-        processor: Wav2Vec2BertProcessor
-        padding: Union[bool, str] = True
-
-        def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
-            # split inputs and labels since they have to be of different lenghts and need
-            # different padding methods
-            input_features = [{"input_features": feature["input_features"]}
-                              for feature in features]
-            label_features = [{"input_ids": feature["labels"]}
-                              for feature in features]
-
-            batch = self.processor.pad(
-                input_features,
-                padding=self.padding,
-                return_tensors="pt",
-            )
-
-            labels_batch = self.processor.pad(
-                labels=label_features,
-                padding=self.padding,
-                return_tensors="pt",
-            )
-            # replace padding with -100 to ignore loss correctly
-            labels = labels_batch["input_ids"].masked_fill(
-                labels_batch.attention_mask.ne(1), -100)
-
-            batch["labels"] = labels
-
-            return batch
-
-    data_collator = DataCollatorCTCWithPadding(
-        processor=processor, padding=True)
+    data_collator = DataCollatorCTCWithPadding(processor=processor, padding=True)
 
     metric = evaluate.load(args.metric)
 
@@ -165,15 +143,13 @@ if __name__ == "__main__":
         pred_logits = pred.predictions
         pred_ids = np.argmax(pred_logits, axis=-1)
 
-        pred.label_ids[pred.label_ids == -
-                       100] = processor.tokenizer.pad_token_id
+        pred.label_ids[pred.label_ids == -100] = processor.tokenizer.pad_token_id
 
         pred_str = processor.batch_decode(pred_ids)
         # we do not want to group tokens when computing the metrics
         label_str = processor.batch_decode(pred.label_ids, group_tokens=False)
 
-        metric_result = metric.compute(
-            predictions=pred_str, references=label_str)
+        metric_result = metric.compute(predictions=pred_str, references=label_str)
 
         return {args.metric: metric_result}
 
