@@ -1,40 +1,60 @@
-'''
+"""
 The following code was heavily copied from this repository: 
     https://github.com/fengredrum/finetune-whisper-lora
-'''
+"""
 
 import gc
 
-from datasets import (load_dataset, concatenate_datasets,
-                      IterableDatasetDict, DatasetDict, Audio)
+from datasets import (
+    load_dataset,
+    concatenate_datasets,
+    IterableDatasetDict,
+    DatasetDict,
+    Audio,
+)
 
 
 def load_common_voice(
-        full_name="mozilla-foundation/common_voice_16_0",
-        language_abbr="mn",
-        sampling_rate=16000,
-        streaming=True,
-        cache_dir="~/.cache/huggingface/datasets",
-        use_valid_to_train=True,
-        test_only=False,
+    full_name="mozilla-foundation/common_voice_16_0",
+    language_abbr="mn",
+    sampling_rate=16000,
+    streaming=True,
+    cache_dir="~/.cache/huggingface/datasets",
+    use_valid_to_train=True,
+    test_only=False,
 ):
 
     # Load test data
     ds_test = load_dataset(
-        full_name, language_abbr, split="test",
-        cache_dir=cache_dir, token=True, trust_remote_code=True)
+        full_name,
+        language_abbr,
+        split="test",
+        cache_dir=cache_dir,
+        token=True,
+        trust_remote_code=True,
+    )
 
     # Load train data
     if not test_only:
         ds_train = load_dataset(
-            full_name, language_abbr, split="train",
-            cache_dir=cache_dir, token=True, trust_remote_code=True)
+            full_name,
+            language_abbr,
+            split="train",
+            cache_dir=cache_dir,
+            token=True,
+            trust_remote_code=True,
+        )
 
     # Use validation data to train
     if use_valid_to_train and not test_only:
         ds_valid = load_dataset(
-            full_name, language_abbr, split="validation",
-            cache_dir=cache_dir, token=True, trust_remote_code=True)
+            full_name,
+            language_abbr,
+            split="validation",
+            cache_dir=cache_dir,
+            token=True,
+            trust_remote_code=True,
+        )
         ds_train = concatenate_datasets([ds_train, ds_valid])
         del ds_valid
 
@@ -55,7 +75,18 @@ def load_common_voice(
 
     # Remove unnecessary columns
     ds = ds.remove_columns(
-        ["accent", "age", "client_id", "down_votes", "gender", "locale", "segment", "up_votes", "variant"])
+        [
+            "accent",
+            "age",
+            "client_id",
+            "down_votes",
+            "gender",
+            "locale",
+            "segment",
+            "up_votes",
+            "variant",
+        ]
+    )
     # Convert sampling rate
     ds = ds.cast_column("audio", Audio(sampling_rate=sampling_rate))
 
@@ -63,16 +94,17 @@ def load_common_voice(
     return ds
 
 
-def load_process_datasets(datasets_settings,
-                          streaming=True,
-                          cache_dir="~/.cache/huggingface/datasets",
-                          num_train_samples=1000,
-                          num_test_samples=1000,
-                          test_only=False,
-                          sampling_rate=16000,
-                          buffer_size=500,
-                          seed=42,
-                          ):
+def load_process_datasets(
+    datasets_settings,
+    streaming=True,
+    cache_dir="~/.cache/huggingface/datasets",
+    num_train_samples=1000,
+    num_test_samples=1000,
+    test_only=False,
+    sampling_rate=16000,
+    buffer_size=500,
+    seed=42,
+):
 
     if streaming:
         ds = IterableDatasetDict()
@@ -85,8 +117,13 @@ def load_process_datasets(datasets_settings,
         ds_tmp = None
 
         if name == "common_voice":
-            ds_tmp = load_common_voice(sampling_rate=sampling_rate,
-                                       streaming=streaming, cache_dir=cache_dir, test_only=test_only, **kwargs)
+            ds_tmp = load_common_voice(
+                sampling_rate=sampling_rate,
+                streaming=streaming,
+                cache_dir=cache_dir,
+                test_only=test_only,
+                **kwargs,
+            )
 
         # Collect datasets
         if ds_tmp is not None:
@@ -120,14 +157,22 @@ def load_process_datasets(datasets_settings,
 
 if __name__ == "__main__":
     datasets_settings = [
-        ["common_voice",
-         {"full_name": "mozilla-foundation/common_voice_16_0",
-             "language_abbr": "mn", "use_valid_to_train": False, }
-         ],
-        ["common_voice",
-         {"full_name": "mozilla-foundation/common_voice_16_0",
-             "language_abbr": "ml", "use_valid_to_train": False, }
-         ],
+        [
+            "common_voice",
+            {
+                "full_name": "mozilla-foundation/common_voice_16_0",
+                "language_abbr": "mn",
+                "use_valid_to_train": False,
+            },
+        ],
+        [
+            "common_voice",
+            {
+                "full_name": "mozilla-foundation/common_voice_16_0",
+                "language_abbr": "ml",
+                "use_valid_to_train": False,
+            },
+        ],
     ]
 
     num_train_samples = 50000
@@ -142,3 +187,5 @@ if __name__ == "__main__":
         seed=2,
     )
     print(ds)
+
+    print(next(iter(ds["test"])))
