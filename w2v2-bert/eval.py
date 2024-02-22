@@ -47,7 +47,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_batch_size", default=32, type=int)
     # Dataset setups
     parser.add_argument("--num_test_samples", default=1000, type=int)
-    parser.add_argument("--streaming", default=False, type=bool)
+    parser.add_argument("--streaming", action="store_true")
     parser.add_argument("--num_proc", default=2, type=int)
     parser.add_argument("--seed", default=27, type=int)
 
@@ -62,6 +62,7 @@ if __name__ == "__main__":
         streaming=args.streaming,
         seed=args.seed,
     )
+    print("Dataset info: ", ds)
 
     # Load processor
     tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(
@@ -72,19 +73,19 @@ if __name__ == "__main__":
         feature_extractor=feature_extractor, tokenizer=tokenizer
     )
 
-    # Output dataset info
-    rand_int = random.randint(0, args.num_test_samples - 1)
-    print("Dataset info: ", ds)
-    print("Target text:", ds["test"][rand_int]["sentence"])
-    print("Input array shape:", ds["test"][rand_int]["audio"]["array"].shape)
-    print("Sampling rate:", ds["test"][rand_int]["audio"]["sampling_rate"])
-
-    ds = ds.map(
-        prepare_dataset,
-        remove_columns=ds["test"].column_names,
-        fn_kwargs={"processor": processor},
-        num_proc=args.num_proc,
-    )
+    if args.streaming:
+        ds = ds.map(
+            prepare_dataset,
+            remove_columns=list(next(iter(ds.values())).features),
+            fn_kwargs={"processor": processor},
+        ).with_format("torch")
+    else:
+        ds = ds.map(
+            prepare_dataset,
+            remove_columns=ds["test"].column_names,
+            fn_kwargs={"processor": processor},
+            num_proc=args.num_proc,
+        ).with_format("torch")
 
     data_collator = DataCollatorCTCWithPadding(processor=processor, padding=True)
     eval_dataloader = DataLoader(
