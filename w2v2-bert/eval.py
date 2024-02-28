@@ -104,6 +104,7 @@ if __name__ == "__main__":
         dtype = torch.float32
         args.device = "cpu"
 
+# TODO remove unnecessary params
     model = Wav2Vec2BertForCTC.from_pretrained(
         model_name_or_path,
         attention_dropout=0.0,

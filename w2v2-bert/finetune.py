@@ -45,7 +45,8 @@ if __name__ == "__main__":
     # Dataset setups
     parser.add_argument("--num_train_samples", default=None, type=int)
     parser.add_argument("--num_test_samples", default=None, type=int)
-    # parser.add_argument("--max_input_length", default=30.0, type=float)
+    parser.add_argument("--max_duration_in_seconds", default=30.0, type=float)
+    parser.add_argument("--min_duration_in_seconds", default=2.0, type=float)
     parser.add_argument("--streaming", action="store_true")
     parser.add_argument("--num_proc", default=4, type=int)
     parser.add_argument("--seed", default=27, type=int)
