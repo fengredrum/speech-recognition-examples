@@ -9,22 +9,26 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # Model setups
-    parser.add_argument("--model_name_or_path", default="facebook/wav2vec2-base")
-    parser.add_argument("--metric", default="wer")
+    parser.add_argument("--model_name_or_path",
+                        default="facebook/wav2vec2-base")
+    parser.add_argument("--metric", default="accuracy")
     parser.add_argument("--device", default="cuda")
     # Dataset setups
+    parser.add_argument("--num_train_samples", default=50000, type=int)
+    parser.add_argument("--num_test_samples", default=3000, type=int)
     parser.add_argument("--max_duration_in_seconds", default=1.0, type=float)
+    parser.add_argument("--num_proc", default=4, type=int)
     # Finetuning setups
-    parser.add_argument("--gradient_accumulation_steps", default=2, type=int)
-    parser.add_argument("--train_batch_size", default=64, type=int)
-    parser.add_argument("--eval_batch_size", default=32, type=int)
+    parser.add_argument("--gradient_accumulation_steps", default=1, type=int)
+    parser.add_argument("--train_batch_size", default=128, type=int)
+    parser.add_argument("--eval_batch_size", default=64, type=int)
     parser.add_argument("--fp16", default=True, type=bool)
 
-    parser.add_argument("--warmup_steps", default=500, type=int)
-    parser.add_argument("--max_steps", default=10000, type=int)
-    parser.add_argument("--save_steps", default=1000, type=int)
+    parser.add_argument("--warmup_ratio", default=0.1, type=int)
+    parser.add_argument("--max_steps", default=2000, type=int)
+    parser.add_argument("--save_steps", default=500, type=int)
     parser.add_argument("--eval_steps", default=100, type=int)
-    parser.add_argument("--logging_steps", default=25, type=int)
+    parser.add_argument("--logging_steps", default=10, type=int)
 
     args = parser.parse_args()
     print(f"Settings: {args}")
@@ -81,9 +85,10 @@ if __name__ == "__main__":
     experiment_name = args.model_name_or_path.split("/")[-1]
 
     args = TrainingArguments(
-        f"logs/{args.model_name_or_path}-finetuned-ks",
-        learning_rate=3e-5,
-        warmup_steps=args.warmup_steps,
+        output_dir=f"logs/{experiment_name}-finetuned-ks",
+        optim="adamw_torch",
+        learning_rate=5e-5,
+        warmup_ratio=args.warmup_ratio,
         per_device_train_batch_size=args.train_batch_size,
         per_device_eval_batch_size=args.eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -96,16 +101,13 @@ if __name__ == "__main__":
         logging_steps=args.logging_steps,
         save_total_limit=2,
         report_to=["tensorboard"],
-        load_best_model_at_end=True,
         metric_for_best_model=args.metric,
-        greater_is_better=False,
         push_to_hub=False,
-        group_by_length=True,
     )
 
     trainer = Trainer(
-        model,
-        args,
+        model=model,
+        args=training_args,
         train_dataset=encoded_dataset["train"],
         eval_dataset=encoded_dataset["validation"],
         tokenizer=feature_extractor,
