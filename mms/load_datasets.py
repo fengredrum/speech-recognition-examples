@@ -16,8 +16,6 @@ from datasets import (
 
 from utils import remove_special_characters, extract_all_chars
 
-chars_to_remove = "[\,\?\.\!\-\;\:\"\“\%\‘\”\�'\»\«]"
-
 
 def load_common_voice(
     full_name="mozilla-foundation/common_voice_16_0",
@@ -91,13 +89,12 @@ def load_process_datasets(
     num_test_samples=1000,
     test_only=False,
     sampling_rate=16000,
-    buffer_size=500,
     num_proc=4,
     seed=42,
 ):
 
     train_list, test_list = [], []
-    for name, kwargs in datasets_settings:
+    for name, kwargs, settings in datasets_settings:
         print(f"Processing dataset: {name} with {kwargs}...")
         ds_tmp = None
 
@@ -132,7 +129,7 @@ def load_process_datasets(
         # Remove special characters and normalize text
         ds = ds.map(
             remove_special_characters,
-            fn_kwargs={"chars_to_remove_regex": chars_to_remove},
+            fn_kwargs={"chars_to_remove_regex": settings["chars_to_remove"]},
             num_proc=num_proc,
         )
 
@@ -156,8 +153,9 @@ def load_process_datasets(
         vocab_dict["[PAD]"] = len(vocab_dict)
         print(vocab_dict)
 
+        new_vocab_dict = {settings["target_lang"]: vocab_dict}
         with open(vocab_dir, "w") as vocab_file:
-            json.dump(vocab_dict, vocab_file)
+            json.dump(new_vocab_dict, vocab_file)
 
     if streaming:
         ds_tmp = ds

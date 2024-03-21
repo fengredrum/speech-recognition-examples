@@ -10,7 +10,7 @@ from transformers import (
     Wav2Vec2Processor,
 )
 
-from utils import prepare_dataset, DataCollatorCTCWithPadding
+from utils import is_audio_in_length_range, prepare_dataset, DataCollatorCTCWithPadding
 from load_datasets import load_process_datasets
 
 
@@ -20,18 +20,22 @@ datasets_settings = [
         "common_voice",
         {
             "full_name": "mozilla-foundation/common_voice_16_0",
-            "language_abbr": "tr",
+            "language_abbr": "ug",
             "use_valid_to_train": True,
+        },
+        {
+            "target_lang": "uig",
+            "chars_to_remove": r"[\,\?\.\!\-\;\:\%\‘\’\“\”\»\«\…\'\"\_\،\؛\؟\ـ]",
         },
     ],
 ]
 
-model_name_or_path = "facebook/mms-1b-all"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # Model setups
+    parser.add_argument("--model_name_or_path", default="facebook/mms-1b-all")
     parser.add_argument("--metric", default="wer")
     parser.add_argument("--device", default="cuda")
     # Dataset setups
@@ -44,11 +48,11 @@ if __name__ == "__main__":
     parser.add_argument("--seed", default=27, type=int)
     # Finetuning setups
     parser.add_argument("--gradient_accumulation_steps", default=2, type=int)
-    parser.add_argument("--train_batch_size", default=32, type=int)
-    parser.add_argument("--eval_batch_size", default=16, type=int)
+    parser.add_argument("--train_batch_size", default=12, type=int)
+    parser.add_argument("--eval_batch_size", default=8, type=int)
     parser.add_argument("--fp16", default=True, type=bool)
 
-    parser.add_argument("--warmup_steps", default=500, type=int)
+    parser.add_argument("--warmup_ratio", default=0.1, type=int)
     parser.add_argument("--max_steps", default=1000, type=int)
     parser.add_argument("--save_steps", default=1000, type=int)
     parser.add_argument("--eval_steps", default=100, type=int)
@@ -68,9 +72,72 @@ if __name__ == "__main__":
     )
     print("Dataset info: ", ds)
 
-    tokenizer = Wav2Vec2CTCTokenizer.from_pretrained("./", unk_token="[UNK]", pad_token="[PAD]", word_delimiter_token="|", target_lang=target_lang)
-    feature_extractor = Wav2Vec2FeatureExtractor(feature_size=1, sampling_rate=16000, padding_value=0.0, do_normalize=True, return_attention_mask=True)
-    processor = Wav2Vec2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
+    tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(
+        "./",
+        unk_token="[UNK]",
+        pad_token="[PAD]",
+        word_delimiter_token="|",
+        target_lang=datasets_settings[0][-1]["target_lang"],
+    )
+    feature_extractor = Wav2Vec2FeatureExtractor(
+        feature_size=1,
+        sampling_rate=16000,
+        padding_value=0.0,
+        do_normalize=True,
+        return_attention_mask=True,
+    )
+    processor = Wav2Vec2Processor(
+        feature_extractor=feature_extractor, tokenizer=tokenizer
+    )
+
+    ds_sample = next(iter(ds["train"]))
+    print("Target text:", ds_sample["sentence"])
+    print("Input array shape:", ds_sample["audio"]["array"].shape)
+    print("Sampling rate:", ds_sample["audio"]["sampling_rate"])
+
+    if args.streaming:
+        map_kwargs = {}
+        training_kwargs = {}
+    else:
+        map_kwargs = {"num_proc": args.num_proc}
+        training_kwargs = {"group_by_length": False}
+
+    ds = ds.map(
+        prepare_dataset,
+        remove_columns=ds["train"].column_names,
+        fn_kwargs={"processor": processor},
+        **map_kwargs,
+    )
+
+    ds = ds.filter(
+        is_audio_in_length_range,
+        input_columns=["input_length"],
+        fn_kwargs={
+            "min_input_length": args.min_duration_in_seconds,
+            "max_input_length": args.max_duration_in_seconds,
+        },
+    )
+
+    data_collator = DataCollatorCTCWithPadding(processor=processor, padding=True)
+
+    model = Wav2Vec2ForCTC.from_pretrained(
+        args.model_name_or_path,
+        attention_dropout=0.0,
+        hidden_dropout=0.0,
+        feat_proj_dropout=0.0,
+        layerdrop=0.0,
+        ctc_loss_reduction="mean",
+        pad_token_id=processor.tokenizer.pad_token_id,
+        vocab_size=len(processor.tokenizer),
+        ignore_mismatched_sizes=True,
+    ).to(args.device)
+
+    model.init_adapter_layers()
+    model.freeze_base_model()
+
+    adapter_weights = model._get_adapters()
+    for param in adapter_weights.values():
+        param.requires_grad = True
 
     metric = evaluate.load(args.metric)
 
@@ -88,52 +155,11 @@ if __name__ == "__main__":
 
         return {args.metric: metric_result}
 
-    ds_sample = next(iter(ds["train"]))
-    print("Target text:", ds_sample["sentence"])
-    print("Input array shape:", ds_sample["audio"]["array"].shape)
-    print("Sampling rate:", ds_sample["audio"]["sampling_rate"])
-
-    if args.streaming:
-        map_kwargs = {}
-        training_kwargs = {}
-    else:
-        map_kwargs = {"num_proc": args.num_proc}
-        training_kwargs = {"group_by_length": True}
-
-    ds = ds.map(
-        prepare_dataset,
-        remove_columns=ds["train"].column_names,
-        fn_kwargs={"processor": processor},
-        **map_kwargs,
-    )
-
-    data_collator = DataCollatorCTCWithPadding(processor=processor, padding=True)
-
-    model = Wav2Vec2ForCTC.from_pretrained(
-        model_name_or_path,
-        attention_dropout=0.0,
-        hidden_dropout=0.0,
-        feat_proj_dropout=0.0,
-        layerdrop=0.0,
-        ctc_loss_reduction="mean",
-        pad_token_id=processor.tokenizer.pad_token_id,
-        vocab_size=len(processor.tokenizer),
-        ignore_mismatched_sizes=True,
-        # torch_dtype=torch.float16,
-    )
-
-    model.init_adapter_layers()
-    model.freeze_base_model()
-
-    adapter_weights = model._get_adapters()
-    for param in adapter_weights.values():
-        param.requires_grad = True
-
-    repo_name = "logs/w2v-bert-CV16.0"
+    repo_name = "logs/mms-CV16.0"
     training_args = TrainingArguments(
         output_dir=repo_name,
         learning_rate=1e-3,
-        warmup_steps=args.warmup_steps,
+        warmup_ratio=args.warmup_ratio,
         per_device_train_batch_size=args.train_batch_size,
         per_device_eval_batch_size=args.eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -152,15 +178,15 @@ if __name__ == "__main__":
         push_to_hub=False,
         **training_kwargs,
     )
-    
+
     trainer = Trainer(
-    model=model,
-    data_collator=data_collator,
-    args=training_args,
-    compute_metrics=compute_metrics,
-    train_dataset=common_voice_train,
-    eval_dataset=common_voice_test,
-    tokenizer=processor.feature_extractor,
-)
+        model=model,
+        data_collator=data_collator,
+        args=training_args,
+        compute_metrics=compute_metrics,
+        train_dataset=ds["train"],
+        eval_dataset=ds["test"],
+        tokenizer=processor.feature_extractor,
+    )
 
     trainer.train()

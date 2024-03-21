@@ -3,7 +3,14 @@ import torch
 
 from dataclasses import dataclass
 from typing import Dict, List, Union
-from transformers import Wav2Vec2BertProcessor
+from transformers import Wav2Vec2Processor
+
+
+def is_audio_in_length_range(length, min_input_length, max_input_length):
+    if length >= min_input_length:
+        return length <= max_input_length
+    else:
+        return False
 
 
 def remove_special_characters(batch, chars_to_remove_regex):
@@ -33,7 +40,7 @@ def prepare_dataset(batch, processor):
 @dataclass
 class DataCollatorCTCWithPadding:
 
-    processor: Wav2Vec2BertProcessor
+    processor: Wav2Vec2Processor
     padding: Union[bool, str] = True
 
     def __call__(
