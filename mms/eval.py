@@ -1,6 +1,5 @@
 import gc
 import torch
-import random
 import argparse
 import numpy as np
 import evaluate
@@ -19,15 +18,13 @@ from utils import prepare_dataset, DataCollatorCTCWithPadding
 
 datasets_settings = [
     [
-        "common_voice",
+        "mdcc",
         {
-            "full_name": "mozilla-foundation/common_voice_16_1",
-            "language_abbr": "zh-HK",
-            "use_valid_to_train": True,
+            "use_valid_to_train": False,
         },
         {
-            "target_lang": "yue-script_traditional",
-            "chars_to_remove": r"[\,\?\.\!\-\;\:\%\‘\’\“\”\»\«\…\'\"\_\،\؛\؟\ـ]",
+            "target_lang": "yue",
+            "chars_to_remove": r"[\,\?\.\!\-\;\:\%\‘\’\“\”\»\«\…\'\"\_\،\؛\؟\ـ\{\}]",
         },
     ],
 ]
@@ -36,12 +33,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # Model setups
-    parser.add_argument("--model_name_or_path", default="facebook/mms-1b-all")
+    parser.add_argument(
+        "--model_name_or_path", default="logs/mms-mdcc/checkpoint-1500/"
+    )
     parser.add_argument("--metric", default="cer")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--eval_batch_size", default=16, type=int)
     # Dataset setups
-    parser.add_argument("--num_test_samples", default=500, type=int)
+    parser.add_argument("--num_test_samples", default=2000, type=int)
     parser.add_argument("--streaming", action="store_true")
     parser.add_argument("--num_proc", default=4, type=int)
     parser.add_argument("--seed", default=27, type=int)
@@ -59,11 +58,35 @@ if __name__ == "__main__":
     )
     print("Dataset info: ", ds)
 
+    # Load pretrained model
+    if args.device == "cuda" and torch.cuda.is_available():
+        dtype = torch.float16
+    else:
+        dtype = torch.float32
+        args.device = "cpu"
+
     target_lang = datasets_settings[0][-1]["target_lang"]
-    model = Wav2Vec2ForCTC.from_pretrained(args.model_name_or_path, target_lang=target_lang,ignore_mismatched_sizes=True).to(args.device)
-    processor = Wav2Vec2Processor.from_pretrained(args.model_name_or_path)
-    processor.tokenizer.set_target_lang(target_lang)
+    model = Wav2Vec2ForCTC.from_pretrained(
+        args.model_name_or_path, ignore_mismatched_sizes=True, torch_dtype=dtype
+    ).to(args.device)
     model.eval()
+    tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(
+        "./",
+        unk_token="[UNK]",
+        pad_token="[PAD]",
+        word_delimiter_token="|",
+        target_lang=target_lang,
+    )
+    feature_extractor = Wav2Vec2FeatureExtractor(
+        feature_size=1,
+        sampling_rate=16000,
+        padding_value=0.0,
+        do_normalize=True,
+        return_attention_mask=True,
+    )
+    processor = Wav2Vec2Processor(
+        feature_extractor=feature_extractor, tokenizer=tokenizer
+    )
 
     if args.streaming:
         map_kwargs = {}
@@ -88,16 +111,6 @@ if __name__ == "__main__":
 
     # Load metric
     metric = evaluate.load(args.metric)
-
-    # Load pretrained model
-    if args.device == "cuda" and torch.cuda.is_available():
-        dtype = torch.float16
-    else:
-        dtype = torch.float32
-        args.device = "cpu"
-
-
-    
 
     for step, batch in enumerate(tqdm(eval_dataloader)):
 
