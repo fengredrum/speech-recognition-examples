@@ -3,6 +3,7 @@ The following code was heavily copied from this repository:
     https://github.com/fengredrum/finetune-whisper-lora
 """
 
+import os
 import gc
 import json
 
@@ -11,10 +12,96 @@ from datasets import (
     concatenate_datasets,
     IterableDatasetDict,
     DatasetDict,
+    Dataset,
     Audio,
 )
 
 from utils import remove_special_characters, extract_all_chars
+
+
+def load_filepaths_and_text(filename, split=","):
+    with open(filename, encoding="utf-8") as f:
+        filepaths_and_text = [line.strip().split(split) for line in f]
+    return filepaths_and_text
+
+
+def create_dataset(
+    dataset_dir,
+    ds_keys,
+    audio_paths,
+    transcription_texts,
+    cache_dir,
+    use_valid_to_train,
+    test_only,
+):
+
+    ds = DatasetDict()
+
+    for key in ds_keys:
+        dataset_dict = {"audio": audio_paths[key], "sentence": transcription_texts[key]}
+        ds_tmp = Dataset.from_dict(dataset_dict)
+
+        json_dir = dataset_dir + f"{key}.json"
+        if not os.path.exists(json_dir):
+            ds_tmp.to_json(json_dir, index=False)
+
+        ds[key] = load_dataset(
+            "json",
+            data_files=dataset_dir + f"/{key}.json",
+            split="train",
+            features=ds_tmp.features,
+            cache_dir=cache_dir,
+        )
+
+    del ds_tmp
+    gc.collect()
+
+    if use_valid_to_train and not test_only:
+        ds["train"] = concatenate_datasets([ds["train"], ds["dev"]])
+
+    return ds
+
+
+def load_mdcc(
+    dataset_root,
+    cache_dir="~/.cache/huggingface/datasets",
+    use_valid_to_train=False,
+    test_only=False,
+):
+    dataset_dir = dataset_root + "mdcc/"
+
+    if test_only:
+        ds_keys = ["test"]
+    else:
+        ds_keys = ["train", "valid", "test"]
+
+    audio_paths, transcription_texts = {}, {}
+    for key in ds_keys:
+        filelist = dataset_dir + f"cnt_asr_{key}_metadata.csv"
+        filepaths_and_text = load_filepaths_and_text(filelist)
+        filepaths_and_text[0].append("transcription")
+        audio_paths[key], transcription_texts[key] = [], []
+        for i in range(1, len(filepaths_and_text)):
+            audio_path = dataset_dir + filepaths_and_text[i][0][2:]
+            audio_paths[key].append(audio_path)
+
+            transcription_path = dataset_dir + filepaths_and_text[i][1][2:]
+            with open(transcription_path, encoding="utf-8") as f:
+                transcription = [line.strip() for line in f][0]
+            # filepaths_and_text[i].append(transcription)
+            transcription_texts[key].append(transcription)
+
+    ds = create_dataset(
+        dataset_dir=dataset_dir,
+        ds_keys=ds_keys,
+        audio_paths=audio_paths,
+        transcription_texts=transcription_texts,
+        cache_dir=cache_dir,
+        use_valid_to_train=use_valid_to_train,
+        test_only=test_only,
+    )
+
+    return ds
 
 
 def load_common_voice(
@@ -83,6 +170,7 @@ def load_common_voice(
 def load_process_datasets(
     datasets_settings,
     streaming=True,
+    dataset_root="../datasets/",
     cache_dir="~/.cache/huggingface/datasets",
     vocab_dir="vocab.json",
     num_train_samples=1000,
@@ -102,6 +190,15 @@ def load_process_datasets(
             ds_tmp = load_common_voice(
                 cache_dir=cache_dir, test_only=test_only, **kwargs
             )
+        elif name == "mdcc":
+            ds_tmp = load_mdcc(
+                dataset_root=dataset_root,
+                cache_dir=cache_dir,
+                test_only=test_only,
+                **kwargs,
+            )
+        else:
+            raise NotImplementedError(f"Can not load {name} dataset!")
 
         # Collect datasets
         if ds_tmp is not None:

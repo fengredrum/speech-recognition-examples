@@ -16,16 +16,26 @@ from load_datasets import load_process_datasets
 
 # TODO Move to ArgumentParser
 datasets_settings = [
+    # [
+    #     "common_voice",
+    #     {
+    #         "full_name": "mozilla-foundation/common_voice_16_0",
+    #         "language_abbr": "ug",
+    #         "use_valid_to_train": True,
+    #     },
+    #     {
+    #         "target_lang": "uig",
+    #         "chars_to_remove": r"[\,\?\.\!\-\;\:\%\‘\’\“\”\»\«\…\'\"\_\،\؛\؟\ـ]",
+    #     },
+    # ],
     [
-        "common_voice",
+        "mdcc",
         {
-            "full_name": "mozilla-foundation/common_voice_16_0",
-            "language_abbr": "ug",
-            "use_valid_to_train": True,
+            "use_valid_to_train": False,
         },
         {
-            "target_lang": "uig",
-            "chars_to_remove": r"[\,\?\.\!\-\;\:\%\‘\’\“\”\»\«\…\'\"\_\،\؛\؟\ـ]",
+            "target_lang": "yue-script_traditional",
+            "chars_to_remove": r"[\,\?\.\!\-\;\:\%\‘\’\“\”\»\«\…\'\"\_\،\؛\؟\ـ\{\}]",
         },
     ],
 ]
@@ -36,7 +46,7 @@ if __name__ == "__main__":
 
     # Model setups
     parser.add_argument("--model_name_or_path", default="facebook/mms-1b-all")
-    parser.add_argument("--metric", default="wer")
+    parser.add_argument("--metric", default="cer")
     parser.add_argument("--device", default="cuda")
     # Dataset setups
     parser.add_argument("--num_train_samples", default=None, type=int)
@@ -51,6 +61,7 @@ if __name__ == "__main__":
     parser.add_argument("--train_batch_size", default=12, type=int)
     parser.add_argument("--eval_batch_size", default=8, type=int)
     parser.add_argument("--fp16", default=True, type=bool)
+    parser.add_argument("--fp16_full_eval", default=True, type=bool)
 
     parser.add_argument("--warmup_ratio", default=0.1, type=int)
     parser.add_argument("--max_steps", default=1000, type=int)
@@ -167,6 +178,7 @@ if __name__ == "__main__":
         max_steps=args.max_steps,
         gradient_checkpointing=True,
         fp16=args.fp16,
+        fp16_full_eval=args.fp16_full_eval,
         save_steps=args.save_steps,
         eval_steps=args.eval_steps,
         logging_steps=args.logging_steps,
